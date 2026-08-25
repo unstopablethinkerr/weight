@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scale to QR Code Reader</title>
+    <!-- Libraries: Tesseract for OCR, QRCode for generation -->
+    <script src="https://unpkg.com/tesseract.js@v4.0.3/dist/tesseract.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background: #f0f2f5;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+            color: #333;
+        }
+        h1 { margin-bottom: 10px; }
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            text-align: center;
+            max-width: 500px;
+            width: 100%;
+        }
+        video {
+            width: 100%;
+            border-radius: 8px;
+            background: #000;
+            margin-bottom: 15px;
+            transform: scaleX(-1); /* Mirror effect for ease of use */
+        }
+        .status {
+            font-size: 0.9em;
+            color: #666;
+            margin: 10px 0;
+            height: 20px;
+        }
+        .result-box {
+            margin: 20px 0;
+            padding: 15px;
+            background: #eef;
+            border-radius: 8px;
+            border: 1px solid #ccd;
+        }
+        #qr-code {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin-top: 10px;
+        }
+        #detected-value {
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #2c3e50;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            font-size: 1em;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+        button:hover { background: #0056b3; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        .warning {
+            font-size: 0.8em;
+            color: #d9534f;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>Scale Reader to QR</h1>
+        <p>Point camera at the digital scale display.</p>
+        
+        <video id="video" autoplay playsinline muted></video>
+        
+        <div class="status" id="status">Initializing camera...</div>
+        
+        <button id="startBtn" onclick="startProcess()">Start Scanning</button>
+
+        <div class="result-box">
+            <div>Detected Weight:</div>
+            <div id="detected-value">--</div>
+            <div id="qr-code"></div>
+        </div>
+
+        <p class="warning">
+            <strong>Note:</strong> OCR accuracy depends on lighting and angle. 
+            Ensure the camera is steady and the digits are clear.
+        </p>
+    </div>
+
+    <script>
+        const video = document.getElementById('video');
+        const statusDiv = document.getElementById('status');
+        const valueDiv = document.getElementById('detected-value');
+        const qrDiv = document.getElementById('qr-code');
+        const startBtn = document.getElementById('startBtn');
+        let qrCodeObj = null;
+        let lastValue = "";
+
+        // 1. Initialize Camera
+        async function initCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: "environment" } // Prefer back camera on mobile
+                });
+                video.srcObject = stream;
+                statusDiv.textContent = "Camera active. Click 'Start Scanning'.";
+            } catch (err) {
+                statusDiv.textContent = "Error: Camera access denied or not available.";
+                console.error(err);
+            }
+        }
+
+        // 2. Process Frame and Extract Text
+        async function processFrame() {
+            if (video.paused || video.ended) return;
+
+            statusDiv.textContent = "Scanning...";
+            
+            try {
+                // Use Tesseract to recognize text in the video frame
+                const { data: { text } } = await Tesseract.recognize(
+                    video,
+                    'eng',
+                    { 
+                        logger: m => {
+                            if(m.status === 'recognizing text') {
+                                statusDiv.textContent = `Processing: ${Math.round(m.progress * 100)}%`;
+                            }
+                        }
+                    }
+                );
+
+                // Clean up the text: Look for numbers, remove noise
+                // This regex finds the first sequence that looks like a weight (e.g., "12.50")
+                const cleanText = text.replace(/[^0-9.\-]/g, '');
+                
+                // Simple validation: must have at least 1 digit and maybe a decimal
+                if (cleanText && cleanText.length > 0) {
+                    updateDisplay(cleanText);
+                } else {
+                    statusDiv.textContent = "No clear weight detected.";
+                }
+
+            } catch (error) {
+                console.error("OCR Error:", error);
+                statusDiv.textContent = "Scan failed.";
+            }
+        }
+
+        // 3. Update UI and Generate QR
+        function updateDisplay(value) {
+            // Avoid updating QR code if value hasn't changed (saves resources)
+            if (value === lastValue) {
+                statusDiv.textContent = `Reading: ${value} (No change)`;
+                return;
+            }
+
+            lastValue = value;
+            valueDiv.textContent = value;
+            statusDiv.textContent = `Value detected: ${value}`;
+            
+            // Generate QR Code
+            qrDiv.innerHTML = ""; // Clear previous
+            qrCodeObj = new QRCode(qrDiv, {
+                text: value,
+                width: 128,
+                height: 128,
+                colorDark : "#000000",
+                colorLight : "#ffffff",
+                correctLevel : QRCode.CorrectLevel.H
+            });
+        }
+
+        // 4. Main Loop
+        async function startProcess() {
+            startBtn.disabled = true;
+            startBtn.textContent = "Scanning...";
+            statusDiv.textContent = "Initializing OCR engine...";
+
+            // Wait a moment for Tesseract worker to load
+            await new Promise(r => setTimeout(r, 1000));
+
+            // Run scan every 2 seconds to avoid lag
+            setInterval(() => {
+                processFrame();
+            }, 2000);
+        }
+
+        // Start camera on load
+        initCamera();
+    </script>
+</body>
+</html>
